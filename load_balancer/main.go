@@ -154,6 +154,7 @@ func (me *LoadBalancer) startHealthCheck() {
 }
 
 // TODO: use cli arguments or config files for targets and port
+// TODO: implement dynamically-weighted round robin algorithm
 func main() {
 	targets := []string{
 		"http://localhost:8080",
