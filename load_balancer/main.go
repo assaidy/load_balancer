@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -158,24 +157,15 @@ func (me *LoadBalancer) startHealthCheck() {
 	}
 }
 
-type StringSlice []string
-
-// Implement flag.Value interface
-func (s *StringSlice) String() string {
-	return fmt.Sprintf("%v", *s)
-}
-
-func (s *StringSlice) Set(value string) error {
-	*s = append(*s, value)
-	return nil
-}
-
 // TODO: implement dynamically-weighted round robin algorithm
 func main() {
 	var port string
-	var backendURLs StringSlice
-	flag.Var(&backendURLs, "add-backend", "Add a backend target URL (can be used multiple times)")
+	var backendURLs []string
 	flag.StringVar(&port, "port", "5050", "port to listen at")
+	flag.Func("add-backend", "Add a backend target URL (can be used multiple times)", func(s string) error {
+		backendURLs = append(backendURLs, s)
+		return nil
+	})
 	flag.Parse()
 
 	lb := newLoadBalancer(backendURLs)
