@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -68,10 +70,10 @@ type LoadBalancer struct {
 	index    uint32
 }
 
-func newLoadBalancer(targets []string) *LoadBalancer {
+func newLoadBalancer(backendURLs []string) *LoadBalancer {
 	var lb LoadBalancer
 
-	for _, it := range targets {
+	for _, it := range backendURLs {
 		url, err := url.Parse(it)
 		if err != nil {
 			logger.Error("failed to parse backend URL", "url", it, "error", err)
@@ -110,6 +112,9 @@ func newLoadBalancer(targets []string) *LoadBalancer {
 }
 
 func (me *LoadBalancer) getNextBackend() *Backend {
+	if len(me.backends) == 0 {
+		return nil
+	}
 	next := atomic.AddUint32(&me.index, uint32(1)) % uint32(len(me.backends))
 	numIterations := next + uint32(len(me.backends))
 	for i := next; i < numIterations; i++ {
@@ -153,22 +158,34 @@ func (me *LoadBalancer) startHealthCheck() {
 	}
 }
 
-// TODO: use cli arguments or config files for targets and port
+type StringSlice []string
+
+// Implement flag.Value interface
+func (s *StringSlice) String() string {
+	return fmt.Sprintf("%v", *s)
+}
+
+func (s *StringSlice) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 // TODO: implement dynamically-weighted round robin algorithm
 func main() {
-	targets := []string{
-		"http://localhost:8080",
-		"http://localhost:8081",
-		"http://localhost:8082",
-	}
+	var port string
+	var backendURLs StringSlice
+	flag.Var(&backendURLs, "add-backend", "Add a backend target URL (can be used multiple times)")
+	flag.StringVar(&port, "port", "5050", "port to listen at")
+	flag.Parse()
 
-	lb := newLoadBalancer(targets)
+	lb := newLoadBalancer(backendURLs)
+	addr := "localhost:" + port
 	server := http.Server{
-		Addr:    "localhost:5050",
+		Addr:    addr,
 		Handler: lb,
 	}
 
-	logger.Info("starting load balancer", "addr", "localhost:5050")
+	logger.Info("starting load balancer", "addr", addr)
 	if err := server.ListenAndServe(); err != nil {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
