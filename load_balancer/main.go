@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"log/slog"
@@ -9,8 +10,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -24,16 +25,19 @@ const (
 )
 
 type Backend struct {
-	url          *url.URL
-	status       BackendStatus
-	reverseProxy *httputil.ReverseProxy
+	url            *url.URL
+	status         BackendStatus
+	reverseProxy   *httputil.ReverseProxy
+	numConnections uint32
 
 	mu sync.RWMutex
 }
 
 const (
-	Retries uint8 = iota
-	Attempts
+	Retries     = "Retries"
+	MaxRetries  = 3
+	Attempts    = "Attempts"
+	MaxAttempts = 3
 )
 
 func (me *Backend) checkHealth() {
@@ -64,9 +68,20 @@ func (me *Backend) getAliveStatus() BackendStatus {
 	return me.status
 }
 
+func (me *Backend) incrementNumConnections() {
+	me.mu.RLock()
+	me.numConnections += 1
+	me.mu.RUnlock()
+}
+
+func (me *Backend) decrementNumConnections() {
+	me.mu.RLock()
+	me.numConnections -= 1
+	me.mu.RUnlock()
+}
+
 type LoadBalancer struct {
 	backends []*Backend
-	index    uint32
 }
 
 func newLoadBalancer(backendURLs []string) *LoadBalancer {
@@ -85,7 +100,7 @@ func newLoadBalancer(backendURLs []string) *LoadBalancer {
 		proxy := httputil.NewSingleHostReverseProxy(backend.url)
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			retries, _ := r.Context().Value(Retries).(uint8)
-			if retries < 3 {
+			if retries < MaxRetries {
 				logger.Info("retrying request", "url", r.URL.String(), "retry", retries+1)
 				// give some time for the backend to recover if it has any errors
 				time.Sleep(10 * time.Millisecond)
@@ -114,23 +129,23 @@ func (me *LoadBalancer) getNextBackend() *Backend {
 	if len(me.backends) == 0 {
 		return nil
 	}
-	next := atomic.AddUint32(&me.index, uint32(1)) % uint32(len(me.backends))
-	numIterations := next + uint32(len(me.backends))
-	for i := next; i < numIterations; i++ {
-		idx := i % uint32(len(me.backends))
-		if me.backends[idx].getAliveStatus() == StatusUp {
-			if i != next {
-				atomic.StoreUint32(&me.index, idx)
-			}
-			return me.backends[idx]
+
+	// TODO: use a min heap O(1) instead of sorting each time O(n)
+	slices.SortFunc(me.backends, func(a, b *Backend) int {
+		return cmp.Compare(a.numConnections, b.numConnections)
+	})
+	for _, it := range me.backends {
+		for it.getAliveStatus() == StatusUp {
+			return it
 		}
 	}
+
 	return nil
 }
 
 func (me *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	attempts, _ := r.Context().Value(Attempts).(uint8)
-	if attempts > 3 {
+	if attempts > MaxAttempts {
 		logger.Error("max attempts reached", "path", r.URL.Path, "method", r.Method)
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
@@ -143,7 +158,9 @@ func (me *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Info("forwarding request", "path", r.URL.Path, "method", r.Method, "backend", backend.url.String())
+	backend.incrementNumConnections()
 	backend.reverseProxy.ServeHTTP(w, r)
+	backend.decrementNumConnections()
 }
 
 func (me *LoadBalancer) startHealthCheck() {
@@ -157,7 +174,6 @@ func (me *LoadBalancer) startHealthCheck() {
 	}
 }
 
-// TODO: implement dynamically-weighted round robin algorithm
 func main() {
 	var port string
 	var backendURLs []string

@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 func main() {
@@ -14,6 +15,7 @@ func main() {
 	flag.Parse()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Millisecond)
 		slog.Info("new request", "addr", r.RemoteAddr)
 		w.Write([]byte("hello from backend server\n"))
 	})

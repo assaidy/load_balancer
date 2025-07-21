@@ -1,5 +1,5 @@
 ### Simple Load Balancer in Go
-The load balancing algorithm used is **dynamically-weighted round robin**.
+The load balancing algorithm used is **Least Connections**.
 
 ### References
 - Load Balancing: https://samwho.dev/load-balancing/
